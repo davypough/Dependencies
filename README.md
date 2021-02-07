@@ -14,7 +14,7 @@ The amount of information printed to the terminal can be controlled by the key p
 
 function:  `display-all-dependencies (&key (pathspec "*.lisp") verbose)`
 
-	Prints out all the dependencies and codependencies among all the files matching the directory pathspec in `*default-pathname-defaults*`
+	*Prints out all the dependencies and codependencies among all the files matching the directory pathspec in `*default-pathname-defaults*`*
 	
 function:  `file-depends-on-what (file1 &key (pathspec "*.lisp") verbose)`
 
