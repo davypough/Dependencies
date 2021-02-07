@@ -10,7 +10,7 @@ More complex examples of dependencies include codependencies, where several file
 
 The amount of information printed to the terminal can be controlled by the key parameter verbose.  The verbose option indicates why the files are dependent.  For example, entering `(display-all-dependencies)` at the REPL simply prints out all detected file dependencies.  But entering `(display-all-dependencies :verbose t)` will additionally show which symbols in the dependent file have definitions in another file.
 
-Interface
+*Interface*
 
 function:  `display-all-dependencies (&key (pathspec "*.lisp") verbose)`
 
