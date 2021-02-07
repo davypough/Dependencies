@@ -8,7 +8,8 @@ To find the dependencies in a project’s files, first load the project files.  
 A simple example of a dependency is the situation where a function is defined in one file, but used in a different file.  In this case the using file depends on the defining file.  But there are a number of other kinds of definitional dependencies checked besides defun, including defmacro, defparameter, defvar, defmethod, and defstruct.
 More complex examples of dependencies include codependencies, where several files depend on each other.  If two files each contain definitions used by the other, then they are codependent.  Multiple files can be circularly dependent on each other, also making them codependent.
 
-The amount of information printed to the terminal can be controlled by the key parameter verbose.  The verbose option indicates why the files are dependent.  For example, entering (display-all-dependencies) at the REPL simply prints out all detected file dependencies.  But entering (display-all-dependencies :verbose t) will additionally show which symbols in the dependent file have definitions in another file.  
+The amount of information printed to the terminal can be controlled by the key parameter verbose.  The verbose option indicates why the files are dependent.  For example, entering (display-all-dependencies) at the REPL simply prints out all detected file dependencies.  But entering (display-all-dependencies :verbose t) will additionally show which symbols in the dependent file have definitions in another file.
+
 Interface
 
 function:  display-all-dependencies (&key (pathspec "*.lisp") verbose)
