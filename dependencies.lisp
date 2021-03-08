@@ -1,36 +1,77 @@
 ;;; Filename:  dependencies.lisp
 
-;;; Finds the dependencies among files (ie, inter-file references) in a project directory.
-;;; Assumes the project files have already been loaded, and
-;;; that *default-pathname-defaults* points to the project directory.
+; Finds the dependencies among files (ie, inter-file references) in a Common
+; Lisp project directory. Assumes the project files have already been loaded,
+; and that *default-pathname-defaults* points to the project directory.
 
 
-(in-package :cl-user)
+(defpackage :dependencies
+  (:use :cl :alexandria :cl-ppcre)
+  (:nicknames :dep)
+  (:export #:file1-depends-on-file2 #:file-depends-on-what
+           #:get-all-dependencies))
 
 
-#-:alexandria (progn (ql:quickload :alexandria) (push :alexandria *features*))
-#-:cl-ppcre (ql:quickload :cl-ppcre)
+(in-package :dep)
 
 
-(use-package :alexandria)
-(use-package :cl-ppcre)
+; Function Specs
+(declaim
+  (ftype (function (string) (values t t))  ;ideal: (values string boolean)
+         purify-file)
+  (ftype (function (list) list)
+         collect-symbols)
+  (ftype (function (t) list)
+         collect-defs)
+  (ftype (function (t) list)
+         collect-defstructs)
+  (ftype (function (list) list)
+         delete-duplicate-cycles)
+  (ftype (function (string) list)
+         pseudo-load)
+  (ftype (function (string string &key (:stream stream) (:print t))
+                   list)
+         file1-depends-on-file2)
+  (ftype (function (string &key (:pathspec pathname) (:stream stream)
+                                (:print t))
+                   list)
+         file-depends-on-what)
+  (ftype (function (list hash-table hash-table) list)
+         backtrack-search)
+  (ftype (function (list list) list)
+         search-for-codependents)
+  (ftype (function (list) list)
+         get-codependencies)
+  (ftype (function (&key (:pathspec pathname) (:stream stream) (:print t))
+                   (values list list))
+         get-all-dependencies))
+
+
+(defmacro prt (&rest vars)
+  "For debugging: Print the names & values of given variables or accessors.
+   Can also wrap around an expression, returning its value."
+  `(progn ,@(loop for var in vars
+              collect `(format t "~&  ~S => ~S~%" ',var ,var))
+          ,@(last `,vars)))
 
 
 (defun purify-file (file)
-  "Transform problematic symbols to benign nil in file, before reading.
+  "Transforms problematic symbols to benign NIL in file, before reading.
    Returns a string of altered file content."
-  (let ((file-string (alexandria:read-file-into-string file)))
-    (ppcre:regex-replace-all
-      "[ \t\r\n]'[A-Za-z0-9!@$%&*_+:=<.>/?-]+"
-      file-string " nil")
+  (let ((file-string (alexandria:read-file-into-string file))
+        (modified-file-string ""))
+    (setf modified-file-string 
+      (ppcre:regex-replace-all
+        "[ \t\r\n]'[A-Za-z0-9!@$%&*_+:=<.>/?-]+"
+        file-string " NIL"))
     (ppcre:regex-replace-all
       "[(][qQ][uU][oO][tT][eE][ \t\r\n]+[A-Za-z0-9!@$%&*_+:=<.>/?-]+[)]"
-      file-string "nil")))
-    
+      modified-file-string "NIL")))
 
-(defun collect-symbols (tree)
-  "Collects all of the symbols in a form."
-  (let ((all-items (alexandria:flatten tree)))
+
+(defun collect-symbols (form)
+  "Collects all of the unique symbols in a form."
+  (let ((all-items (alexandria:flatten form)))
     (delete-if (lambda (item)
                  (or (not (symbolp item))
                      (find-symbol (symbol-name item) :cl)))
@@ -40,20 +81,44 @@
 (defun collect-defs (forms)
   "Collects all of the defined names in forms, excluding defstructs."
   (loop for form in forms
-        when (member (first form)
-               '(defun defmacro defparameter defvar defmethod))
-        collect (second form)))
+    when (and (consp form)
+              (member (first form)
+                      '(defun defmacro defparameter defvar defmethod)))
+      collect (second form)))
 
 
 (defun collect-defstructs (forms)
   "Collects all of the defined defstruct names in forms."
   (loop for form in forms
-        when (member (first form) 
-               '(defstruct))
-         if (symbolp (second form))
-           collect (second form)
-           else if (listp (second form))
-                  collect (first (second form))))
+    when (and (consp form)
+              (member (first form) 
+                      '(defstruct)))
+      if (symbolp (second form))
+        collect (second form)
+        else if (listp (second form))
+               collect (first (second form))))
+
+
+(defun collect-struct-fns (defstruct-syms all-syms)
+  "Collects all of the structure access function names in all-syms
+   that are associated with the structure names in defstruct-syms."
+  (delete-if #'null
+    (alexandria:map-product
+      (lambda (defstruct-sym sym)
+        (when (and (not (eql defstruct-sym sym))
+                   ;only std :conc-name structure prefix
+                   ;with hyphen recognized
+                   (search (format NIL "~S-" defstruct-sym)
+                           (format NIL "~S" sym)))
+          sym))
+      defstruct-syms all-syms)))
+
+
+(defun delete-duplicate-cycles (cycles)
+  "Deletes any duplicate dependency cycles found during search."
+  (delete-duplicates cycles
+    :test (lambda (cyc1 cyc2)
+            (alexandria:set-equal cyc1 cyc2 :test #'equal))))
 
 
 (defun pseudo-load (file)
@@ -63,96 +128,125 @@
   (let ((file-string (purify-file file))
         (*package* *package*))
     (with-input-from-string (in-stream file-string)
-      (loop for form = (read in-stream nil in-stream)
-            while (not (eql form in-stream))
-            when (and (consp form)
-                      (eq (first form) 'in-package))
-             do (setf *package* (find-package (second form)))
-            collect form))))
+      (loop for form = (read in-stream NIL in-stream)
+        while (not (eql form in-stream))
+        when (and (consp form)
+                  (eql (first form) 'in-package))
+          do (let ((file-pkg (find-package (second form))))
+               (if file-pkg
+                 (setf *package* file-pkg)
+                 (error "~%Unknown package name: ~A in file: ~A
+                         ~&Make sure project files are loaded.~%"
+                        (second form) file)))
+          collect form))))
 
 
-(defun file1-depends-on-file2 (file1 file2 &key verbose)
-  "Determines if file1 depends on file2."
-  (let* ((1forms (pseudo-load file1))
-         (all1-syms (collect-symbols 1forms))
-         (defstruct1-syms (collect-defstructs 1forms))
-         (1syms (set-difference all1-syms defstruct1-syms :test #'equal))
+(defun file1-depends-on-file2 (file1 file2 &key (stream *standard-output*)
+                                                (print nil))
+  "Returns or prints those symbols in file1 that are defined in file2."
+  (let* ((forms1 (pseudo-load file1))
+         (all-syms1 (collect-symbols forms1))
+         (def-syms1 (collect-defs forms1))  ;eg, (defun sym ...
+         (defstruct-syms1 (collect-defstructs forms1))  ;eg, (defstruct sym ...
+         (struct-fns1 (collect-struct-fns defstruct-syms1  ;eg, (sym-slot ...
+                                          all-syms1))
+         (active-syms1 (set-difference all-syms1 
+                                       (append def-syms1 defstruct-syms1
+                                               struct-fns1)))
          (forms2 (pseudo-load file2))
-         (def2-syms (collect-defs forms2))
-         (defstruct2-syms (collect-defstructs forms2))
-         (11syms (loop for defstruct2-sym in defstruct2-syms
-                   append (loop for 1sym in 1syms
-                            when (and (not (eql defstruct2-sym 1sym))
-                                      (search (format nil "~S" defstruct2-sym)
-                                              (format nil "~S" 1sym)))
-                             collect 1sym))))
-    (when verbose
-      (format t "~%~A symbols:~%~S~%" file1 1syms)
-      (format t "~%~A symbols:~%~S~%" file2 def2-syms)
-      (format t "~%~A structures:~%~S~%" file2 defstruct2-syms)
-      (format t "~%~A symbols dependent on ~A:~%" file1 file2))
-    (append (intersection 1syms def2-syms)
-            11syms)))
+         (def-syms2 (collect-defs forms2))
+         (defstruct-syms2 (collect-defstructs forms2))
+         (all-defs2 (append def-syms2 defstruct-syms2))
+         ;collect dependent structure fn names in active-sims1
+         ;for structures defined in forms2
+         (dep-struct-fns1 (collect-struct-fns defstruct-syms2 active-syms1)))
+    (let ((dependent-symbols 
+            (append (set-difference (intersection active-syms1 all-defs2)
+                                    defstruct-syms2)
+                    dep-struct-fns1)))
+      (if print
+        (format stream "~%~S symbols dependent on ~S definitions:~%~S~2%"
+                       file1 file2 dependent-symbols)
+        (when dependent-symbols
+          (list file1 file2 dependent-symbols))))))
 
 
-(defun file-depends-on-what (file1 &key (pathspec "*.lisp") verbose)
-  "Prints out all dependencies of a file in directory = *default-pathname-defaults*."
-  (let ((files (mapcar #'file-namestring (directory pathspec))))
-    (loop for file2 in files
-          unless (equal file1 file2)
-           do (let ((deps (file1-depends-on-file2 file1 file2)))
-                (when deps
-                  (if verbose
-                    (format t "~%~A depends on ~A~%~S~%"
-                            (file-namestring file1) (file-namestring file2) deps)
-                    (format t "~%~A depends on ~A~%"
-                            (file-namestring file1) (file-namestring file2))))))))
+(defun file-depends-on-what (file1 &key (pathspec #P"*.lisp")
+                                        (stream *standard-output*) (print nil))
+  "Returns a list of, or prints, all dependencies of a file
+   in directory = *default-pathname-defaults*."
+  (loop with files = (mapcar #'file-namestring (directory pathspec))
+    for file2 in files
+    unless (equal file1 file2)
+      collect (file1-depends-on-file2 file1 file2 :stream stream)
+             into dependencies
+    finally (let ((actual-dependencies (delete-if #'null dependencies)))
+              (if print
+                (dolist (dep actual-dependencies)
+                  (format stream 
+                          "~%~S symbols dependent on ~S definitions:~%~S~2%"
+                          (first dep) (second dep) (third dep)))
+                (return actual-dependencies)))))
 
 
-(defun all-path-cycles (node current-path adjacency-table)
-  "Recursively follow all paths in a dependency network."
-  (if (member node current-path :test #'equal)
-    (list (subseq current-path 0 (1+ (position node current-path :test #'equal))))
-    (loop for child in (gethash node adjacency-table)
-          append (all-path-cycles child (cons node current-path) adjacency-table))))
+(defun backtrack-search (current-path adjacency-table visited)
+  "Recursively follow dependency paths from all file nodes, detecting cycles."
+  (let* ((node (first current-path))
+         (cycle (member node (reverse (cdr current-path)) :test #'equal)))
+    (if cycle
+      (progn (setf (gethash node visited) T)
+             (list cycle))
+      (let ((children (gethash node adjacency-table)))
+        (if children
+          (loop for child in children
+            unless (gethash child visited)
+            nconc (backtrack-search (cons child current-path)
+                                    adjacency-table visited)
+            finally (setf (gethash node visited) T))
+          (not (setf (gethash node visited) T)))))))
 
 
-(defun codependents (node-list dependencies)
-  "Returns all dependent cycles for all nodes."
-  (let ((adjacency-table (make-hash-table :test #'equal)))
-    (loop for dep in dependencies
-          do (push (second dep) (gethash (first dep) adjacency-table)))
+(defun search-for-codependents (node-list dependencies)
+  "Detects & returns all dependent cycles for all nodes
+   in a dependency network."
+  (let* ((node-count (length node-list))
+         (adjacency-table (make-hash-table :test #'equal :size node-count))
+         (visited (make-hash-table :test #'equal :size node-count)))
+    (loop for (file1 file2 *) in dependencies
+      do (push file2 (gethash file1 adjacency-table)))
     (loop for node in node-list
-          append (all-path-cycles node nil adjacency-table))))
+      do (clrhash visited)
+      nconc (backtrack-search (list node) adjacency-table visited)
+            into all-cycles
+      finally (return (delete-duplicate-cycles all-cycles)))))
 
 
-(defun display-codependencies (dependencies)
-  "Prints out all codependencies among a group of files."
-  (format t "~%Codependent files (with circular reference):~%")
-  (let* ((node-list (remove-duplicates (alexandria:flatten dependencies)
-                                       :test #'equal))
-         (codependents (remove-duplicates (codependents node-list dependencies)
-                                          :test (lambda (set1 set2)
-                                                  (alexandria:set-equal set1 set2
-                                                                        :test #'equal)))))
-    (loop for co-set in codependents
-          do (format t "~S~%" co-set))))
-    
-  
-(defun display-all-dependencies (&key (pathspec "*.lisp") verbose)
-  "Prints out all dependencies of every pathspec file in 
+(defun get-codependencies (dependencies)
+  "Returns all codependencies among a group of inter-dependent files."
+  (let ((file-list (delete-duplicates 
+                     (loop for (file1 file2 *) in dependencies
+                       collect file1 collect file2)
+                     :test #'equal)))
+    (search-for-codependents file-list dependencies)))
+
+
+(defun get-all-dependencies (&key (pathspec #P"*.lisp")
+                                  (stream *standard-output*) (print nil))
+  "Returns or prints dependencies and codependencies of every pathspec file in 
    directory = *default-pathname-defaults*."
-  (let ((files (mapcar #'file-namestring (directory pathspec))))
-    (loop with dependencies
-          for file1 in files
-          do (loop for file2 in files
-                   unless (equal file1 file2)
-                     do (let ((deps (file1-depends-on-file2 file1 file2)))
-                          (when deps
-                            (push (list file1 file2) dependencies)
-                            (if verbose
-                              (format t "~%~A depends on ~A~%~S~%"
-                                      (file-namestring file1) (file-namestring file2) deps)
-                              (format t "~%~A depends on ~A~%"
-                                      (file-namestring file1) (file-namestring file2))))))
-          finally (display-codependencies dependencies))))
+  (let* ((files (mapcar #'file-namestring (directory pathspec)))
+         (dependencies (delete-if #'null
+                         (alexandria:map-product
+                           (lambda (file1 file2)
+                             (unless (equal file1 file2)
+                               (file1-depends-on-file2 file1 file2)))
+                           files files)))
+         (codependencies (get-codependencies dependencies)))
+    (cond (print
+            (dolist (dep dependencies)
+              (format stream "~%~S symbols dependent on ~S definitions:~%~S~%"
+                             (first dep) (second dep) (third dep)))
+            (format stream "~2%Codependent files (with circular references):~%")
+            (dolist (codep codependencies)
+             (format stream "~S~%" codep)))
+          (t (values dependencies codependencies)))))
