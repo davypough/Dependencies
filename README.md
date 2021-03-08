@@ -11,18 +11,18 @@ More complex examples of dependencies include codependencies, where several file
 
 **Interface Functions**
 
-dep:get-all-dependencies (&key (pathspec #P"*.lisp") (stream *standard-output*)
-                               (print nil))
-"Returns (or prints) all inter-file dependencies and codependencies."
+    dep:get-all-dependencies (&key (pathspec #P"*.lisp") (stream *standard-output*)
+                                   (print nil))
+    "Returns (or prints) all inter-file dependencies and codependencies."
 
 
-dep:file1-depends-on-file2 (file1 file2 &key (stream *standard-output*)
-                                             (print nil))
-"Returns (or prints) all of the symbols in file1 that depend on definitions in file2."
+    dep:file1-depends-on-file2 (file1 file2 &key (stream *standard-output*)
+                                                 (print nil))
+    "Returns (or prints) all of the symbols in file1 that depend on definitions in file2."
 
 
-dep:file-depends-on-what (file1 &key (pathspec #P"*.lisp")
-                                     (stream *standard-output*) (print nil))
-"Returns (or prints), for a given file1, all of the files and definitions it depends on."
+    dep:file-depends-on-what (file1 &key (pathspec #P"*.lisp")
+                                         (stream *standard-output*) (print nil))
+    "Returns (or prints), for a given file1, all of the files and definitions it depends on."
 
 For example, `(dep:get-all-dependencies :print t)` is the simplest way to get everything at once in a user-friendly format.  Assumes `*default-pathname-defaults*` has been set to the project directory.  The keyword :print determines if the output is in data structure format (default nil) or user-friendly format (t).
