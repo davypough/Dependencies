@@ -30,7 +30,7 @@
   (ftype (function (string) list)
          pseudo-load)
   (ftype (function (string string &key (:stream stream) (:print t))
-                   list)
+                   (or null dependency))
          file1-depends-on-file2)
   (ftype (function (string &key (:pathspec pathname) (:stream stream)
                                 (:print t))
@@ -53,6 +53,12 @@
   `(progn ,@(loop for var in vars
               collect `(format t "~&  ~S => ~S~%" ',var ,var))
           ,@(last `,vars)))
+
+
+(defstruct (dependency (:conc-name dependency.))
+  (file1 "" :type string)  ;the dependent file
+  (file2 "" :type string)  ;the independent file containing definitions
+  (symbols nil :type list))  ;the symbols in file1 that depend on file2
 
 
 (defun purify-file (file)
@@ -108,8 +114,10 @@
         (when (and (not (eql defstruct-sym sym))
                    ;only std :conc-name structure prefix
                    ;with hyphen recognized
-                   (search (format NIL "~S-" defstruct-sym)
-                           (format NIL "~S" sym)))
+                   (or (search (format NIL "~S-" defstruct-sym)
+                               (princ-to-string sym))
+                       (equal (format NIL "make-~S" defstruct-sym)
+                              (princ-to-string sym))))
           sym))
       defstruct-syms all-syms)))
 
@@ -157,7 +165,7 @@
          (def-syms2 (collect-defs forms2))
          (defstruct-syms2 (collect-defstructs forms2))
          (all-defs2 (append def-syms2 defstruct-syms2))
-         ;collect dependent structure fn names in active-sims1
+         ;collect dependent structure accessor fn names in active-sims1
          ;for structures defined in forms2
          (dep-struct-fns1 (collect-struct-fns defstruct-syms2 active-syms1)))
     (let ((dependent-symbols 
@@ -168,7 +176,8 @@
         (format stream "~%~S symbols dependent on ~S definitions:~%~S~2%"
                        file1 file2 dependent-symbols)
         (when dependent-symbols
-          (list file1 file2 dependent-symbols))))))
+          (make-dependency :file1 file1 :file2 file2
+                           :symbols dependent-symbols))))))
 
 
 (defun file-depends-on-what (file1 &key (pathspec #P"*.lisp")
@@ -179,13 +188,14 @@
     for file2 in files
     unless (equal file1 file2)
       collect (file1-depends-on-file2 file1 file2 :stream stream)
-             into dependencies
+              into dependencies
     finally (let ((actual-dependencies (delete-if #'null dependencies)))
               (if print
                 (dolist (dep actual-dependencies)
                   (format stream 
                           "~%~S symbols dependent on ~S definitions:~%~S~2%"
-                          (first dep) (second dep) (third dep)))
+                          (dependency.file1 dep) (dependency.file2 dep)
+                          (dependency.symbols dep)))
                 (return actual-dependencies)))))
 
 
@@ -212,8 +222,9 @@
   (let* ((node-count (length node-list))
          (adjacency-table (make-hash-table :test #'equal :size node-count))
          (visited (make-hash-table :test #'equal :size node-count)))
-    (loop for (file1 file2 *) in dependencies
-      do (push file2 (gethash file1 adjacency-table)))
+    (dolist (dep dependencies)
+      (push (dependency.file2 dep)
+            (gethash (dependency.file1 dep) adjacency-table)))
     (loop for node in node-list
       do (clrhash visited)
       nconc (backtrack-search (list node) adjacency-table visited)
@@ -224,8 +235,9 @@
 (defun get-codependencies (dependencies)
   "Returns all codependencies among a group of inter-dependent files."
   (let ((file-list (delete-duplicates 
-                     (loop for (file1 file2 *) in dependencies
-                       collect file1 collect file2)
+                     (loop for dep in dependencies
+                       collect (dependency.file1 dep)
+                       collect (dependency.file2 dep))
                      :test #'equal)))
     (search-for-codependents file-list dependencies)))
 
@@ -245,7 +257,8 @@
     (cond (print
             (dolist (dep dependencies)
               (format stream "~%~S symbols dependent on ~S definitions:~%~S~%"
-                             (first dep) (second dep) (third dep)))
+                             (dependency.file1 dep) (dependency.file2 dep)
+                             (dependency.symbols dep)))
             (format stream "~2%Codependent files (with circular references):~%")
             (dolist (codep codependencies)
              (format stream "~S~%" codep)))
