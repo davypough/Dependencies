@@ -158,9 +158,11 @@
          (defstruct-syms1 (collect-defstructs forms1))  ;eg, (defstruct sym ...
          (struct-fns1 (collect-struct-fns defstruct-syms1  ;eg, (sym-slot ...
                                           all-syms1))
-         (active-syms1 (set-difference all-syms1 
-                                       (append def-syms1 defstruct-syms1
-                                               struct-fns1)))
+         (active-syms1 (set-difference 
+                         (set-difference
+                           (set-difference all-syms1 def-syms1)
+                           defstruct-syms1)
+                         struct-fns1))
          (forms2 (pseudo-load file2))
          (def-syms2 (collect-defs forms2))
          (defstruct-syms2 (collect-defstructs forms2))
