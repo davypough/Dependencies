@@ -7,5 +7,5 @@
   :version "1.1"
   :author "David Brown <davypough@gmail.com>"
   :licence "Public Domain"
-  :depends-on ("alexandria" "cl-ppcre")
+  :depends-on ("alexandria")
   :components ((:file "dependencies")))

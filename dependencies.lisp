@@ -6,7 +6,7 @@
 
 
 (defpackage :dependencies
-  (:use :cl :alexandria :cl-ppcre)
+  (:use :cl :alexandria)
   (:nicknames :dep)
   (:export #:file1-depends-on-file2 #:file-depends-on-what
            #:get-all-dependencies))
@@ -17,8 +17,8 @@
 
 ; Function Specs
 (declaim
-  (ftype (function (string) (values t t))  ;ideal: (values string boolean)
-         purify-file)
+  (ftype (function (list) list)
+         purify-forms)
   (ftype (function (list) list)
          collect-symbols)
   (ftype (function (t) list)
@@ -61,27 +61,22 @@
   (symbols nil :type list))  ;the symbols in file1 that depend on file2
 
 
-(defun purify-file (file)
-  "Transforms problematic symbols to benign NIL in file, before reading.
-   Returns a string of altered file content."
-  (let ((file-string (alexandria:read-file-into-string file))
-        (modified-file-string ""))
-    (setf modified-file-string 
-      (ppcre:regex-replace-all
-        "[ \t\r\n]'[A-Za-z0-9!@$%&*_+:=<.>/?-]+"
-        file-string " NIL"))
-    (ppcre:regex-replace-all
-      "[(][qQ][uU][oO][tT][eE][ \t\r\n]+[A-Za-z0-9!@$%&*_+:=<.>/?-]+[)]"
-      modified-file-string "NIL")))
+(defun purify-forms (forms)
+  (nsubst-if nil (lambda (item)
+                   (and (consp item)
+                        (eql (car item) 'quote)))
+             forms))
 
 
-(defun collect-symbols (form)
-  "Collects all of the unique symbols in a form."
-  (let ((all-items (alexandria:flatten form)))
-    (delete-if (lambda (item)
-                 (or (not (symbolp item))
-                     (find-symbol (symbol-name item) :cl)))
-               (delete-duplicates all-items))))
+(defun collect-symbols (forms)
+  "Walks forms tree, executing :key for each cons and atom."
+  (let (symbols)
+    (subst-if t (constantly nil) forms
+              :key (lambda (item)
+                     (when (and (symbolp item)
+                                (not (find-symbol (symbol-name item) :cl)))
+                       (push item symbols))))
+    (delete-duplicates symbols)))
 
 
 (defun collect-defs (forms)
@@ -130,12 +125,12 @@
 
 
 (defun pseudo-load (file)
-  "Attempt to read a file doing what LOAD would do. May not always do
-   the right thing. Returns list of all forms, including package prefixes.
-   Based on a function provided by tfb on Stack Overflow."
-  (let ((file-string (purify-file file))
-        (*package* *package*))
-    (with-input-from-string (in-stream file-string)
+  "Read a file doing what LOAD would do. May not always do
+   the right thing. Assumes file is already loaded. Returns list of
+   all forms, including package prefixes. Based on a function provided
+   by tfb on Stack Overflow."
+  (let ((*package* *package*))
+    (with-open-file (in-stream file)
       (loop for form = (read in-stream NIL in-stream)
         while (not (eql form in-stream))
         when (and (consp form)
@@ -152,7 +147,7 @@
 (defun file1-depends-on-file2 (file1 file2 &key (stream *standard-output*)
                                                 (print nil))
   "Returns or prints those symbols in file1 that are defined in file2."
-  (let* ((forms1 (pseudo-load file1))
+  (let* ((forms1 (purify-forms (pseudo-load file1)))
          (all-syms1 (collect-symbols forms1))
          (def-syms1 (collect-defs forms1))  ;eg, (defun sym ...
          (defstruct-syms1 (collect-defstructs forms1))  ;eg, (defstruct sym ...
